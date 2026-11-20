@@ -6,7 +6,8 @@ from src.models.user import User
 from src.models.source import Source
 from src.models.record import Record
 from src.models.run import Run
-from src.models import note,audit
+from src.models import note,audit,audience,comparison
+from src.models.audience import AudienceProfile
 from src.utils.security import hash_password
 from src.utils.serialization import now
 from src.services.runs import queue
@@ -49,9 +50,18 @@ def seed():
                 if not db.scalar(select(Record.id).where(Record.source_id==source.id,Record.reference==reference)):
                     db.add(Record(source_id=source.id,reference=reference,values=validate_record(vals)))
             db.flush()
-            if batch==0 and not db.scalar(select(Run.id).where(Run.name=='首轮种子研究')):
-                records=[{'id':r.id,'source_id':r.source_id,'reference':r.reference,'values':r.values} for r in db.scalars(select(Record).where(Record.source_id==source.id).order_by(Record.id))]
-                run=Run(source_id=source.id,name='首轮种子研究',state='queued',parameters=CONFIG['default_parameters'],snapshot={'source':{'id':source.id,'name':source.name,'filename':source.filename},'records':records},created_at=now());db.add(run);db.flush();queued.append(run.id)
+            if batch==0:
+                for run_name,params in (('首轮种子研究',CONFIG['default_parameters']),('首轮对照参数研究',{'neighbors':3,'min_common':2})):
+                    if not db.scalar(select(Run.id).where(Run.name==run_name)):
+                        records=[{'id':r.id,'source_id':r.source_id,'reference':r.reference,'values':r.values} for r in db.scalars(select(Record).where(Record.source_id==source.id).order_by(Record.id))]
+                        run=Run(source_id=source.id,name=run_name,state='queued',parameters=params,snapshot={'source':{'id':source.id,'name':source.name,'filename':source.filename},'records':records},created_at=now());db.add(run);db.flush();queued.append(run.id)
+        if not db.scalar(select(AudienceProfile.id)):
+            ages=[{'key':'18-25','label':'18–25 岁','share':0.28},{'key':'26-35','label':'26–35 岁','share':0.34},{'key':'36-50','label':'36–50 岁','share':0.23},{'key':'51+','label':'51 岁及以上','share':0.15}]
+            methods=[{'key':'solo','label':'个人参观','share':0.46},{'key':'family','label':'亲子同行','share':0.31},{'key':'group','label':'团体预约','share':0.23}]
+            forbidden=[{'age':'18-25','method':'group'},{'age':'51+','method':'group'}]
+            cells=[('18-25','solo'),('18-25','family'),('26-35','solo'),('26-35','family'),('26-35','group'),('36-50','solo'),('36-50','family'),('36-50','group'),('51+','solo')]
+            visitor_cells={f'V{n:03}':{'age':c[0],'method':c[1]} for n,c in enumerate(cells*5,1) if n<=40}
+            db.add(AudienceProfile(name='2026 冬季试展客群基线',payload={'age_groups':ages,'visit_methods':methods,'forbidden':forbidden,'visitor_cells':visitor_cells},created_by='seed',created_at=now()))
         db.commit();print(json.dumps(counts(db),ensure_ascii=False))
     for id in queued:
         try:queue.rpush('analysis:queue',id)
